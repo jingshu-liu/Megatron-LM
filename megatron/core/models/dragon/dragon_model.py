@@ -13,7 +13,7 @@ from megatron.core.models.common.language_module.language_module import Language
 from megatron.core.transformer.enums import ModelType
 from megatron.core.transformer.spec_utils import ModuleSpec, build_module
 from megatron.core.transformer.dragon_config import DragonConfig
-
+from cut_cross_entropy import linear_cross_entropy
 
 class DragonModel(LanguageModule):
     """SambaModel language model.
@@ -72,6 +72,7 @@ class DragonModel(LanguageModule):
         rotary_percent: float = 1.0, #Check what should be the default value for our model config
         rotary_base: int = 10000, #Check what should be the default value for our model config
         seq_len_interpolation_factor: Optional[float] = None,
+        use_cce: bool = False,
     ) -> None:
         super().__init__(config=config)
 
@@ -96,6 +97,8 @@ class DragonModel(LanguageModule):
         # These 2 attributes are needed for TensorRT-LLM export.
         self.max_position_embeddings = max_sequence_length
         self.rotary_percent = rotary_percent
+
+        self.use_cce = use_cce
 
         if self.pre_process:
             self.embedding = LanguageModelEmbedding(
@@ -215,6 +218,14 @@ class DragonModel(LanguageModule):
         output_weight = None
         if self.share_embeddings_and_output_weights:
             output_weight = self.shared_embedding_or_output_weight()
+        
+        # change loss here for CCE
+        if self.use_cce:       
+            classifier = self.output_layer.weight
+            if labels is None: labels = input_ids     
+            loss = linear_cross_entropy(hidden_states, classifier, labels, shift=True, impl="torch_compile")
+            return loss
+
         logits, _ = self.output_layer(hidden_states, weight=output_weight)
 
         if has_config_logger_enabled(self.config):
