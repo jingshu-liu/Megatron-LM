@@ -112,6 +112,9 @@ class TransformerConfig(ModelParallelConfig):
     """Whether cross entropy loss is calculated over the actual number of non-padded tokens in the
     global batch, versus the default behavior of assuming all tokens are non-padded."""
 
+    patch_size: int = 1
+    """patch size for patch level training, patch size=1 means no patch level training"""
+
     ####################
     # initialization
     ####################

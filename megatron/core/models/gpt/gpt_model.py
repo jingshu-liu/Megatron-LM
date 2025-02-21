@@ -4,7 +4,8 @@ from collections import OrderedDict
 from typing import Dict, Literal, Optional
 
 from torch import Tensor
-
+import torch
+import torch.nn.functional as F
 from megatron.core import InferenceParams, tensor_parallel
 from megatron.core.config_logger import has_config_logger_enabled, log_config_to_disk
 from megatron.core.dist_checkpointing.mapping import ShardedStateDict
@@ -85,6 +86,8 @@ class GPTModel(LanguageModule):
         self.parallel_output = parallel_output
         self.share_embeddings_and_output_weights = share_embeddings_and_output_weights
         self.position_embedding_type = position_embedding_type
+
+        self.patch_size = self.config.patch_size
 
         # megatron core pipelining currently depends on model type
         # TODO: remove this dependency ?
@@ -175,6 +178,24 @@ class GPTModel(LanguageModule):
         assert len(input_tensor) == 1, 'input_tensor should only be length 1 for gpt/bert'
         self.decoder.set_input_tensor(input_tensor[0])
 
+    # Copied from transformers.models.bart.modeling_bart.BartDecoder._prepare_decoder_attention_mask
+    def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
+        # create causal mask
+        # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+
+        batch_size, length = input_shape
+        device = inputs_embeds.device
+        dtype=inputs_embeds.dtype
+
+        mask = torch.triu(torch.ones(length, length, device=device), diagonal=1).to(dtype)
+        mask = mask.masked_fill(mask == 1, torch.finfo(dtype).min)
+        mask = mask[None, None, :, :].expand(batch_size, 1, length, length)
+
+        if past_key_values_length > 0:
+            mask = torch.cat([torch.zeros(length, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
+
+        return mask
+
     def forward(
         self,
         input_ids: Tensor,
@@ -192,6 +213,8 @@ class GPTModel(LanguageModule):
 
         It either returns the Loss values if labels are given  or the final hidden units
         """
+        
+        
         # If decoder_input is provided (not None), then input_ids and position_ids are ignored.
         # Otherwise, apply embedding layer on input_ids and position_ids to get decoder_input.
 
@@ -205,6 +228,17 @@ class GPTModel(LanguageModule):
             # decoder will get hidden_states from encoder.input_tensor
             decoder_input = None
 
+        # apply patch level here 
+        batch_size, seq_length = input_ids.size()
+        num_patches = seq_length // self.patch_size
+        decoder_input = decoder_input.view(batch_size, num_patches, self.patch_size, -1).mean(2)
+        position_ids = position_ids[:, :num_patches]
+        if attention_mask is not None:
+            # we don't have past_key_values here but we have it in llama_modeling, currently we set it to 0 todo: verify
+            past_key_values_length = 0
+            attention_mask = self._prepare_decoder_attention_mask(
+                attention_mask, (batch_size, num_patches), decoder_input, past_key_values_length
+            )
         # Rotary positional embeddings (embedding is None for PP intermediate devices)
         rotary_pos_emb = None
         if self.position_embedding_type == 'rope':
@@ -244,11 +278,27 @@ class GPTModel(LanguageModule):
             )
             log_config_to_disk(self.config, payload, prefix='input_and_logits')
 
+        
         if labels is None:
             # [s b h] => [b s h]
             return logits.transpose(0, 1).contiguous()
 
-        loss = self.compute_language_model_loss(labels, logits)
+        if self.patch_size>1:
+            # patch level training loss
+            # when logits = [b s h], in Transformers
+            # shift_logits = logits[..., :-1, :].reshape(-1, self.vocab_size)
+            # when logits = [s b h], here in Megatron
+            shift_logits = logits[:-1, ...].reshape(-1, self.vocab_size) # ((sequence_length - 1) * batch_size, vocab_size)
+            # labels = [b s]
+            shift_labels = labels[..., self.patch_size:].reshape(-1, self.patch_size) # (new_size, self.patch_size), new_size = (batch_size * (sequence_length - self.patch_size)) // self.patch_size
+            log_probs = F.log_softmax(shift_logits, dim=1) 
+            loss=0
+            for i in range(self.patch_size):
+                loss = loss + F.nll_loss(log_probs, shift_labels[:, i])
+            loss = loss / self.patch_size
+            return loss # [b s]
+
+        loss = self.compute_language_model_loss(labels, logits) # [s b] => [b, s]
 
         return loss
 
