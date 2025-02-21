@@ -880,6 +880,8 @@ def _add_network_size_args(parser):
                        dest='bert_binary_head')
     group.add_argument('--untie-embeddings-and-output-weights', action='store_true',
                        help='Untie embeddings and output weights.'),
+    group.add_argument('--patch-size', type=int, default=1,
+                       help='patch size in patch level training, 1 means no patch level trainig.'),
     return parser
 
 

@@ -221,7 +221,7 @@ class TransformerBlock(MegatronModule):
         self._build_layers()
         self.num_layers_per_pipeline_rank = len(self.layers)
         self.tp_only_amax_red = config.tp_only_amax_red
-        self.patch_size = self.config.patch_size
+        # self.patch_size = self.config.patch_size
 
     def _build_layers(self):
         # Transformer layers.
@@ -395,8 +395,13 @@ class TransformerBlock(MegatronModule):
         if not self.pre_process:
             # See set_input_tensor()
             hidden_states = self.input_tensor
-        seq_length = hidden_states.size()[0]
-        num_patches = seq_length // self.patch_size
+        # hidden_states [s, b, h]
+        # seq_length, batch_size,_ = hidden_states.size()
+        # patch level training 
+        # num_patches = seq_length // self.patch_size
+        # hidden_states = hidden_states.view(batch_size, num_patches, self.patch_size, -1).mean(2)
+        
+        # position_ids = position_ids[:, :num_patches]
 
         # Viewless tensor.
         # - We only need to create a viewless tensor in the case of micro batch
