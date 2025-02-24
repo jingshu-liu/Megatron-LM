@@ -82,7 +82,7 @@ class BaseFragonLayer(ABC):
         pass
 
 
-class DragonLayer(MegatronModule, BaseTransformerLayer):
+class DragonLayer(MegatronModule):
     """A single transformer layer.
 
     Transformer layer takes input with size [s, b, h] and returns an
@@ -120,11 +120,11 @@ class DragonLayer(MegatronModule, BaseTransformerLayer):
         
     
         # [Module 2: InputProjection]
-        # intermediate_size = int(2 * self.config.hidden_size) # Mamba Expand
+        intermediate_size = int(2 * self.config.hidden_size) # Mamba Expand
         # attention_head_size = int(intermediate_size / self.config.num_attention_heads)
         
         #Save params for forward pass
-        # self.intermediate_size = intermediate_size
+        self.intermediate_size = intermediate_size
         # self.attention_head_size = attention_head_size
         # self.num_attention_heads = self.config.num_attention_heads
         # self.num_query_groups = self.config.num_query_groups
@@ -179,8 +179,7 @@ class DragonLayer(MegatronModule, BaseTransformerLayer):
         self.mamba_mixer = build_module(
             submodules.mamba,
             self.config,
-            d_model=self.config.hidden_size,
-            ngroups=mamba_ssm_ngroups,
+            mamba_ssm_ngroups=mamba_ssm_ngroups,
             layer_number=layer_number,
         )
         
@@ -202,15 +201,22 @@ class DragonLayer(MegatronModule, BaseTransformerLayer):
             config=self.config,
             init_method=self.config.init_method,
             gather_output=False,
-            layer_number=layer_number,
             bias=True,
             skip_bias_add=True,
             tp_comm_buffer_name='output_proj',
-            return_layernorm_output=False,
+            is_expert=False,
         )
 
         # [Module 8: MLP block]
-        self.mlp = build_module(submodules.mlp, config=self.config)
+        self.mlp = build_module(
+            submodules.mlp, 
+            config=self.config,
+            init_method=self.config.init_method,
+            input_size=self.config.hidden_size,
+            hidden_size=4*self.config.hidden_size,
+            bias=True,
+            skip_bias_add=False            
+        )
         if hasattr(self.mlp, 'set_layer_number'):
             self.mlp.set_layer_number(self.layer_number)
 
@@ -359,27 +365,33 @@ class DragonLayer(MegatronModule, BaseTransformerLayer):
             rotary_pos_emb=rotary_pos_emb,
             packed_seq_params=packed_seq_params,
         )
-        print("Attention Output: ", attention_output.shape)
+        # print("Attention Output: ", attention_output.shape)
         # Post attention layernorm.
+        # print("Attention Output contig: ", attention_output.is_contiguous())
         attention_layer_norm = self.self_attn_layernorm(attention_output)
 
-        mamba_output = self.mamba_mixer(input_layernorm_output, inference_params=inference_params)
-        print("Mamba Output: ", mamba_output.shape)
+        mamba_output = self.mamba_mixer(
+            input_layernorm_output,
+            attention_mask=attention_mask, #not used but required for compatibility
+            inference_params=inference_params,
+        )
+        # print("Mamba Output: ", mamba_output.shape)
         # Post Mamba layernorm.
         mamba_layer_norm = self.mamba_layernorm(mamba_output)
         
         # Output projection.
         average  = (attention_layer_norm + mamba_layer_norm) / 2
         
-        output_proj_output = self.output_projection(average)
+        output_proj_output, _ = self.output_projection(average)
+        # print("Output Projection: ", output_proj_output)
         
         residual = output_proj_output + residual
 
-        print("Residual after output projection: ", residual.shape)
+        # print("Residual after output projection: ", residual.shape)
         
         
         # MLP.
-        mlp_output = self.mlp(residual)
+        mlp_output, _ = self.mlp(residual)
         
         output = mlp_output + residual
         

@@ -116,7 +116,7 @@ class DragonMambaMixer(MegatronModule):
         ngroups=8,
         A_init_range=(1, 16),
         D_has_hdim=False,
-        rmsnorm=True,
+        rmsnorm=False,
         norm_before_gate=False,
         dt_min=0.001,
         dt_max=0.1,
@@ -384,9 +384,7 @@ class DragonMambaMixer(MegatronModule):
                 y = rearrange(y, "b l h p -> b l (h p)").contiguous()
 
         y = rearrange(y, "b l d -> l b d").contiguous()
-        out, out_bias = self.out_proj(y)
-
-        return out, out_bias
+        return y
 
     def step(self, hidden_states, conv_state, ssm_state):
         """

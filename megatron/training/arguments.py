@@ -1237,7 +1237,7 @@ def _add_training_args(parser):
                        help='Enable bias only in the QKV linear layers',
                        dest='add_qkv_bias')
     group.add_argument('--optimizer', type=str, default='adam',
-                       choices=['adam', 'sgd', 'ademamix', 'muon'],
+                       choices=['adam', 'sgd', 'ademamix', 'spam'],
                        help='Optimizer function')
     group.add_argument('--dataloader-type', type=str, default=None,
                        choices=['single', 'cyclic', 'external'],

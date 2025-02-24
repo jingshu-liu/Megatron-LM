@@ -14,7 +14,6 @@ from megatron.core.transformer.moe.shared_experts import SharedExpertMLP
 from megatron.core.transformer.spec_utils import ModuleSpec
 from megatron.core.transformer.dragon_layer import DragonLayer, DragonLayerSubmodules
 from megatron.core.ssm.mamba_layer import MambaLayer, MambaLayerSubmodules
-from megatron.core.ssm.mamba_mixer import MambaMixer, MambaMixerSubmodules
 from megatron.core.ssm.dragon_mamba_mixer import DragonMambaMixer, DragonMambaMixerSubmodules
 from megatron.core.transformer.dragon_block import DragonStack, DragonStackSubmodules
 try:
@@ -62,7 +61,6 @@ dragon_stack_spec = ModuleSpec(
                     submodules=DragonSelfAttentionSubmodules(
                         linear_qkv=TEColumnParallelLinear,
                         core_attention=TEDotProductAttention,
-                        linear_proj=TERowParallelLinear,
                         # TENorm significantly harms convergence when used
                         # for QKLayerNorm; we instead use the Apex implementation.
                         q_layernorm=FusedLayerNorm,
@@ -82,7 +80,7 @@ dragon_stack_spec = ModuleSpec(
                     ),
                 ),
                 mamba_layernorm=TENorm,
-                output_projection=TERowParallelLinear,
+                output_projection=TEColumnParallelLinear,
                 
                 mlp=TELayerNormMLP,
             ),

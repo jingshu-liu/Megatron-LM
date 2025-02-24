@@ -16,14 +16,13 @@ TENSORBOARD_LOGS_PATH=$2 #<Specify path>
 VOCAB_FILE=$3 #<Specify path to file>/gpt2-vocab.json
 DATA_PATH=$4 #<Specify path and file prefix>_text_document
 
-# Calculate the number of workers
-num_workers=$((GPUS_PER_NODE * 8))
-
 # Apply the maximum limit of 16
-if [ "$num_workers" -gt 16 ]; then
+if [ "$WORLD_SIZE" -gt 16 ]; then
   num_workers=16
+else
+  num_workers=$WORLD_SIZE
 fi
-
+    
 echo "Master Address : "$MASTER_ADDR" | "$NUM_NODES" Nodes | World Size : "$WORLD_SIZE
 
 DISTRIBUTED_ARGS=(
@@ -37,13 +36,13 @@ DISTRIBUTED_ARGS=(
 )
 
 GPT_MODEL_ARGS=(
-    --num-layers 1
+    --num-layers 14
     --hidden-size 1024 
     --num-attention-heads 16 
     --seq-length 4096 
     --max-position-embeddings 4096
     --seed 42
-    --spec megatron.core.models.dragon.dragon_layer_specs samba_stack_spec
+    --spec megatron.core.models.dragon.dragon_layer_specs dragon_stack_spec
     --normalization RMSNorm
     --group-query-attention
     --num-query-groups 8
@@ -72,7 +71,7 @@ TRAINING_ARGS=(
     --use-flash-attn
     #--use-distributed-optimizer
     --sequence-parallel
-
+    --slw_warmup_steps 1000
 )
 
 MODEL_PARALLEL_ARGS=(

@@ -70,6 +70,8 @@ class MambaLayer(MegatronModule):
 
         mixer_out_with_bias = self.mixer(hidden_states, inference_params=inference_params)
 
+        return mixer_out_with_bias # Modification for hymba
+    
         with self.bias_dropout_add_exec_handler():
             hidden_states = self.mamba_bda(self.training, self.config.bias_dropout_fusion)(
                 mixer_out_with_bias, residual, self.hidden_dropout

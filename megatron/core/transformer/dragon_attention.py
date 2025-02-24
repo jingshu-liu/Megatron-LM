@@ -75,11 +75,11 @@ class DragonAttention(MegatronModule, ABC):
         # For normal attention without groups, num_query_groups == num_attention_heads,
         # so these two will be the same
         self.query_projection_size = self.config.kv_channels * self.config.num_attention_heads
-        self.kv_projection_size = self.config.kv_channels * self.config.num_query_groups
+        self.kv_projection_size =  self.config.kv_channels * self.config.num_query_groups
 
         # Per attention head and per partition values.
         world_size = parallel_state.get_tensor_model_parallel_world_size()
-        self.hidden_size_per_attention_head = divide(
+        self.hidden_size_per_attention_head = 2 * divide(
             self.query_projection_size, self.config.num_attention_heads
         )
         self.num_attention_heads_per_partition = divide(self.config.num_attention_heads, world_size)
@@ -92,7 +92,7 @@ class DragonAttention(MegatronModule, ABC):
         attention_config.num_attention_heads = self.config.num_attention_heads // 2
         attention_config.num_query_groups = self.config.num_query_groups // 2
         attention_config.hidden_size = self.hidden_size_per_attention_head * attention_config.num_attention_heads
-        
+        attention_config.kv_channels = self.config.kv_channels * 2 #For hymba
         
         self.core_attention = build_module(
             submodules.core_attention,
@@ -208,6 +208,7 @@ class DragonAttention(MegatronModule, ABC):
         # ==================================
         if not self.fix_window_size and OPTIMIZER_PARAM_SCHEDULER is not None:
             slw = OPTIMIZER_PARAM_SCHEDULER.get_slw()
+            print("slw: ", slw)
             if slw == 1.0:
                 self.fix_window_size = True
                 window_size  = self.window_size
@@ -215,6 +216,8 @@ class DragonAttention(MegatronModule, ABC):
                 window_size = (int(self.window_size[0] * slw), int(self.window_size[1] * slw))
         else:
             window_size = self.window_size
+            
+        print(window_size)
             
 
         if self.checkpoint_core_attention and self.training:
@@ -346,7 +349,7 @@ class DragonSelfAttention(DragonAttention):
         self.linear_qkv = build_module(
             submodules.linear_qkv,
             self.config.hidden_size,
-            self.query_projection_size + 2 * self.kv_projection_size if cache_sharing == CacheSharing.FIRST else self.query_projection_size,
+            2 * (self.query_projection_size + 2 * self.kv_projection_size if cache_sharing == CacheSharing.FIRST else self.query_projection_size),
             config=self.config,
             init_method=self.config.init_method,
             gather_output=False,
@@ -544,8 +547,9 @@ class DragonDiffSelfAttention(DragonSelfAttention):
         packed_seq_params=None,
     ):
         # hidden_states: [sq, b, h]
-
-        
+        # print("Hidden States: ", hidden_states.shape)
+        # print("Key: ", key.shape if key is not None else None)
+        # print("Value: ", value.shape if value is not None else None)
 
         # For self attention we just duplicate the rotary_pos_emb if it isn't already
         if rotary_pos_emb is not None and not isinstance(rotary_pos_emb, tuple):
@@ -558,8 +562,12 @@ class DragonDiffSelfAttention(DragonSelfAttention):
         # self or cross attn.
         if self.cache_sharing == CacheSharing.FIRST:
             query, key, value = self.get_query_key_value_tensors(hidden_states, key_value_states)
+            # print("Query: ", query.shape)
+            # print("Key: ", key.shape)
+            # print("Value: ", value.shape)
         else:
-            query, _ = self.linear_qkv(hidden_states)    
+            query, _ = self.linear_qkv(hidden_states)
+            # print("Query: ", query.shape)    
 
         # ===================================================
         # Adjust key, value, and rotary_pos_emb for inference
@@ -599,10 +607,11 @@ class DragonDiffSelfAttention(DragonSelfAttention):
         # ==================================
         # diff attention reshaping
         # ==================================
+        #print("num_query_groups_per_partition: ", self.num_query_groups_per_partition)
         
         query = query.reshape(
             query.shape[:-2] + (
-                self.num_query_groups_per_partition // 2,
+                self.num_attention_heads_per_partition // 2,
                 2,
                 query.shape[-1],
             )
@@ -617,7 +626,7 @@ class DragonDiffSelfAttention(DragonSelfAttention):
         
         value = value.reshape(
             value.shape[:-2] + (
-                self.num_attention_heads_per_partition // 2,
+                self.num_query_groups_per_partition // 2,
                 2*value.shape[-1],
             )
         )
@@ -629,6 +638,8 @@ class DragonDiffSelfAttention(DragonSelfAttention):
         # ==================================
         # core attention computation
         # ==================================
+        print("Optimiser Param Scheduler: ", OPTIMIZER_PARAM_SCHEDULER)
+        print("Fix Window Size: ", self.fix_window_size)
         if not self.fix_window_size and OPTIMIZER_PARAM_SCHEDULER is not None:
             slw = OPTIMIZER_PARAM_SCHEDULER.get_slw()
             if slw == 1.0:
@@ -638,6 +649,8 @@ class DragonDiffSelfAttention(DragonSelfAttention):
                 window_size = (int(self.window_size[0] * slw), int(self.window_size[1] * slw))
         else:
             window_size = self.window_size
+            
+        print("Window size :", window_size)
             
         corr_attn_func = None
         if self.checkpoint_core_attention and self.training:
@@ -693,7 +706,7 @@ class DragonDiffSelfAttention(DragonSelfAttention):
         lambda_1 = torch.exp(torch.sum(self.lambda_q1 * self.lambda_k1, dim=-1).float()).type_as(query)
         lambda_2 = torch.exp(torch.sum(self.lambda_q2 * self.lambda_k2, dim=-1).float()).type_as(query)
         lambda_full = lambda_1 - lambda_2 + self.lambda_init
-        core_attn_out = attn1 - lambda_full * attn2
+        core_attn_out = (attn1 - lambda_full * attn2).contiguous()  # Changed to contiguous()
         
 
         if packed_seq_params is not None:

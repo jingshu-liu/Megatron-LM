@@ -378,23 +378,12 @@ class TELayerNormMLP(te.pytorch.LayerNormMLP):
         init_method: Callable,
         bias: bool,
         skip_bias_add: bool,
-        activation = "squared_relu", # one of 'gelu', 'geglu', 'relu', 'reglu', 'squared_relu', 'swiglu', 'qgemu', 'srelu'
+        activation = "srelu", # one of 'gelu', 'geglu', 'relu', 'reglu', 'squared_relu', 'swiglu', 'qgemu', 'srelu'
         tp_comm_buffer_name: str = None,
         return_layernorm_output : bool = False,
     ):
         self.config = config
         extra_kwargs = _get_extra_te_kwargs(config)
-
-        if extra_kwargs["gather_output"]:
-            raise ValueError('Transformer Engine linear layers do not support gather_output = True')
-
-        if extra_kwargs["is_expert"]:
-            raise ValueError('Transformer Engine linear layers do not yet support MoE')
-
-        if extra_kwargs["skip_weight_param_allocation"]:
-            raise ValueError(
-                'Transformer Engine linear layers do not support skip_weight_param_allocation'
-            )
 
         # TE returns a zero length Tensor when bias=False and
         # return_bias=True, but we prefer None.  So in that case we

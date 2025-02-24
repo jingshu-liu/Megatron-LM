@@ -50,6 +50,12 @@ class DragonConfig(ModelParallelConfig):
     """Projection weights dimension in multi-head attention. This is set to hidden_size //
     num_attention_heads if not provided."""
 
+    hidden_dropout: float = 0.1
+    """Dropout probability for transformer hidden state."""
+
+    attention_dropout: float = 0.1
+    """Post attention dropout probability."""
+    
     fp32_residual_connection: bool = False
     """If true, move residual connections to fp32."""
 
@@ -71,9 +77,15 @@ class DragonConfig(ModelParallelConfig):
     add_qkv_bias: bool = False
     """Add a bias term only for QKV projections."""
 
+    gated_linear_unit: bool = False
+    """Use a gated linear unit for the first linear layer in the MLP."""
+        
+    activation_func: Callable = F.gelu
+    """Activation function to use for the non-linearity in the MLP."""
+
     activation_func_fp8_input_store: bool = False
     """Store the input of MLP activation function in FP8 for backprop to save memory.
-    The stored input is casted back to the original precision before backprop compuatation."""
+    The stored input is casted back to the original precision before backprop computation."""
 
     num_moe_experts: int = None
     """Number of experts to use for MoE layer. When set, it replaces MLP with MoE layer. Set to None
@@ -87,7 +99,7 @@ class DragonConfig(ModelParallelConfig):
     """If not None, then will use sliding window attention. The size of the window is specified by
     the numbers inside the tuple; -1 is special value meaning "infinite window size"."""
 
-    normalization: bool = "LayerNorm"
+    normalization: bool = "RMSNorm"
     """Which norm to use for normalization layers, valid options are `LayerNorm` and `RMSNorm`."""
 
     qk_layernorm: bool = False
@@ -149,6 +161,9 @@ class DragonConfig(ModelParallelConfig):
     memory_efficient_layer_norm: bool = False
     """If True, and using local layers (not from TransformerEngine), tells Apex to use the memory
     efficient fused LayerNorm kernel. Ignored if not using LayerNorm."""
+
+    bias_dropout_fusion: bool = False  # TODO: this should be bias_dropout_add_fusion?
+    """If True, uses bias dropout fusion."""
 
     apply_rope_fusion: bool = False
     """If True, use fused RoPE kernel."""
