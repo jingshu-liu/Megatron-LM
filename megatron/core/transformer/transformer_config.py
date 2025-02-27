@@ -115,6 +115,9 @@ class TransformerConfig(ModelParallelConfig):
     patch_size: int = 1
     """patch size for patch level training, patch size=1 means no patch level training"""
 
+    use_cce: bool = False
+    """use cut cross-entropy, default to false"""
+    
     ####################
     # initialization
     ####################

@@ -882,6 +882,9 @@ def _add_network_size_args(parser):
                        help='Untie embeddings and output weights.'),
     group.add_argument('--patch-size', type=int, default=1,
                        help='patch size in patch level training, 1 means no patch level trainig.'),
+    group.add_argument('--use-cce', action='store_true',
+                       help='use cut cross-entropy'),
+    
     return parser
 
 
