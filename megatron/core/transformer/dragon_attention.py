@@ -208,17 +208,13 @@ class DragonAttention(MegatronModule, ABC):
         # ==================================
         if not self.fix_window_size and OPTIMIZER_PARAM_SCHEDULER is not None:
             slw = OPTIMIZER_PARAM_SCHEDULER.get_slw()
-            print("slw: ", slw)
             if slw == 1.0:
                 self.fix_window_size = True
                 window_size  = self.window_size
             else:
-                window_size = (int(self.window_size[0] * slw), int(self.window_size[1] * slw))
+                window_size = (max(8, int(self.window_size[0] * slw)), 0)
         else:
             window_size = self.window_size
-            
-        print(window_size)
-            
 
         if self.checkpoint_core_attention and self.training:
             core_attn_out = self._checkpointed_attention_forward(
@@ -345,11 +341,16 @@ class DragonSelfAttention(DragonAttention):
             window_size=window_size,
         )
         self.cache_sharing = cache_sharing
+        #print("Attention Cache Sharing: ", self.cache_sharing)
+        #print("Query Projection Size: ", self.query_projection_size)
+        #print("cache sharing first :", cache_sharing.value == CacheSharing.FIRST.value)
+        #print("if cache sharing first :", self.query_projection_size + 2 * self.kv_projection_size)
+        #print("if cache sharing second :", self.query_projection_size)
         
         self.linear_qkv = build_module(
             submodules.linear_qkv,
             self.config.hidden_size,
-            2 * (self.query_projection_size + 2 * self.kv_projection_size if cache_sharing == CacheSharing.FIRST else self.query_projection_size),
+            2 * (self.query_projection_size + 2 * self.kv_projection_size if cache_sharing.value == CacheSharing.FIRST.value else self.query_projection_size),
             config=self.config,
             init_method=self.config.init_method,
             gather_output=False,
@@ -358,7 +359,7 @@ class DragonSelfAttention(DragonAttention):
             is_expert=False,
             tp_comm_buffer_name='qkv',
         )
-        
+        print("Linear QKV: ", self.linear_qkv.weight.shape)
         if submodules.q_layernorm is not None:
             self.q_layernorm = build_module(
                 submodules.q_layernorm,
@@ -369,7 +370,7 @@ class DragonSelfAttention(DragonAttention):
         else:
             self.q_layernorm = None
 
-        if submodules.k_layernorm is not None and cache_sharing == CacheSharing.FIRST:
+        if submodules.k_layernorm is not None and cache_sharing.value == CacheSharing.FIRST.value:
             self.k_layernorm = build_module(
                 submodules.k_layernorm,
                 hidden_size=self.hidden_size_per_attention_head,
@@ -560,22 +561,30 @@ class DragonDiffSelfAttention(DragonSelfAttention):
         # =====================
         # Get the query, key and value tensors based on the type of attention -
         # self or cross attn.
-        if self.cache_sharing == CacheSharing.FIRST:
+        if self.cache_sharing.value == CacheSharing.FIRST.value:
             query, key, value = self.get_query_key_value_tensors(hidden_states, key_value_states)
-            # print("Query: ", query.shape)
-            # print("Key: ", key.shape)
-            # print("Value: ", value.shape)
+            #print("Cache Sharing: ", self.cache_sharing)
+            #print("Linear QKV: ", self.linear_qkv.weight.shape)
+            #print("Query: ", query.shape)
+            #print("Key: ", key.shape)
+            #print("Value: ", value.shape)
         else:
             query, _ = self.linear_qkv(hidden_states)
-            # print("Query: ", query.shape)    
+            query = query.reshape(query.size(0), query.size(1), -1, self.hidden_size_per_attention_head)
+            #print("Cache Sharing: ", self.cache_sharing)
+            #print("Linear QKV: ", self.linear_qkv.weight.shape)
+            #print("Query: ", query.shape)    
+
 
         # ===================================================
         # Adjust key, value, and rotary_pos_emb for inference
         # ===================================================
-        if self.cache_sharing == CacheSharing.FIRST:
+        if self.cache_sharing.value == CacheSharing.FIRST.value:
             key, value, rotary_pos_emb, attn_mask_type = self._adjust_key_value_for_inference(
                 inference_params, key, value, rotary_pos_emb
             )
+        else:
+            attn_mask_type = self.attn_mask_type # Need to be smarter here on inference it won't work            
 
         if packed_seq_params is not None:
             query = query.squeeze(1)
@@ -596,8 +605,9 @@ class DragonDiffSelfAttention(DragonSelfAttention):
             query = apply_rotary_pos_emb(
                 query, q_pos_emb, config=self.config, cu_seqlens=cu_seqlens_q
             )
-            if self.cache_sharing == CacheSharing.FIRST:
+            if self.cache_sharing.value == CacheSharing.FIRST.value:
                 key = apply_rotary_pos_emb(key, k_pos_emb, config=self.config, cu_seqlens=cu_seqlens_kv)
+
 
             # TODO, can apply positional embedding to value_layer so it has
             # absolute positional embedding.
@@ -616,20 +626,22 @@ class DragonDiffSelfAttention(DragonSelfAttention):
                 query.shape[-1],
             )
         )
-        key = key.reshape(
-            key.shape[:-2] + (
-                self.num_query_groups_per_partition // 2,
-                2,
-                key.shape[-1],
-            )
-        )
         
-        value = value.reshape(
-            value.shape[:-2] + (
-                self.num_query_groups_per_partition // 2,
-                2*value.shape[-1],
+        if self.cache_sharing.value == CacheSharing.FIRST.value:
+            key = key.reshape(
+                key.shape[:-2] + (
+                    self.num_query_groups_per_partition // 2,
+                    2,
+                    key.shape[-1],
+                )
             )
-        )
+            
+            value = value.reshape(
+                value.shape[:-2] + (
+                    self.num_query_groups_per_partition // 2,
+                    2*value.shape[-1],
+                )
+            )
         query1, query2 = query[:, :, :, 0], query[:, :, :, 1]
         key1, key2 = key[:, :, :, 0], key[:, :, :, 1]
         #value1, value2 = value[:, :, :, 0], value[:, :, :, 1]
@@ -638,8 +650,8 @@ class DragonDiffSelfAttention(DragonSelfAttention):
         # ==================================
         # core attention computation
         # ==================================
-        print("Optimiser Param Scheduler: ", OPTIMIZER_PARAM_SCHEDULER)
-        print("Fix Window Size: ", self.fix_window_size)
+        #print("Optimiser Param Scheduler: ", OPTIMIZER_PARAM_SCHEDULER)
+        #print("Fix Window Size: ", self.fix_window_size)
         if not self.fix_window_size and OPTIMIZER_PARAM_SCHEDULER is not None:
             slw = OPTIMIZER_PARAM_SCHEDULER.get_slw()
             if slw == 1.0:
@@ -650,7 +662,7 @@ class DragonDiffSelfAttention(DragonSelfAttention):
         else:
             window_size = self.window_size
             
-        print("Window size :", window_size)
+        #print("Window size :", window_size)
             
         corr_attn_func = None
         if self.checkpoint_core_attention and self.training:
@@ -719,5 +731,5 @@ class DragonDiffSelfAttention(DragonSelfAttention):
         # =================
         # Output. [sq, b, h]
         # =================
-        return core_attn_out
+        return core_attn_out, key, value
 

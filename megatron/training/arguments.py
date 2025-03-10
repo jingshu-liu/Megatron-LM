@@ -419,6 +419,7 @@ def validate_args(args, defaults={}):
             args.ffn_hidden_size = 4 * args.hidden_size
 
     if args.kv_channels is None:
+        #print("Hidden size and attention_heads :", args.hidden_size, args.num_attention_heads)
         assert args.hidden_size % args.num_attention_heads == 0
         args.kv_channels = args.hidden_size // args.num_attention_heads
 

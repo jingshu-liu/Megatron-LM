@@ -117,9 +117,9 @@ class OptimizerParamScheduler:
         log_single_rank(logger, logging.INFO, f"> learning rate decay style: {self.lr_decay_style}")
 
     def get_slw(self) -> float:
-        print("num_steps: ", self.num_steps)
-        print("global_batch_size: ", self.global_batch_size)
-        print("slw_warmup_steps: ", self.slw_warmup_steps)
+        #("num_steps: ", self.num_steps)
+        #print("global_batch_size: ", self.global_batch_size)
+        #print("slw_warmup_steps: ", self.slw_warmup_steps)
         return min(self.num_steps/self.global_batch_size/self.slw_warmup_steps, 1.0)
 
 

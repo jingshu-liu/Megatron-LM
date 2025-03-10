@@ -37,8 +37,8 @@ DISTRIBUTED_ARGS=(
 
 GPT_MODEL_ARGS=(
     --num-layers 14
-    --hidden-size 1024 
-    --num-attention-heads 16 
+    --hidden-size 2048 
+    --num-attention-heads 16
     --seq-length 4096 
     --max-position-embeddings 4096
     --seed 42

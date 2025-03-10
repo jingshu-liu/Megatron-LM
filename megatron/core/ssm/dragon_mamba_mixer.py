@@ -116,8 +116,6 @@ class DragonMambaMixer(MegatronModule):
         ngroups=8,
         A_init_range=(1, 16),
         D_has_hdim=False,
-        rmsnorm=False,
-        norm_before_gate=False,
         dt_min=0.001,
         dt_max=0.1,
         dt_init="random",
@@ -143,8 +141,6 @@ class DragonMambaMixer(MegatronModule):
         assert self.d_inner % self.headdim == 0
         self.nheads = self.d_inner // self.headdim
         self.D_has_hdim = D_has_hdim
-        self.rmsnorm = rmsnorm
-        self.norm_before_gate = norm_before_gate
         self.chunk_size = chunk_size
         self.use_mem_eff_path = use_mem_eff_path
         self.layer_number = layer_number
@@ -154,7 +150,6 @@ class DragonMambaMixer(MegatronModule):
         assert self.ngroups % self.tensor_model_parallel_size == 0
         assert self.nheads % self.tensor_model_parallel_size == 0
         assert not bias
-        assert not self.norm_before_gate
 
         self.d_inner_local = self.d_inner // self.tensor_model_parallel_size
         self.ngroups_local = self.ngroups // self.tensor_model_parallel_size
@@ -240,16 +235,6 @@ class DragonMambaMixer(MegatronModule):
         self.D._no_weight_decay = True
         setattr(self.D, 'tensor_model_parallel', True)
 
-        if self.rmsnorm:
-            assert RMSNormGated is not None
-            self.norm = ExtendedRMSNorm(
-                self.d_inner_local,
-                eps=1e-5,
-                group_size=self.d_inner_local // self.ngroups_local,
-                norm_before_gate=self.norm_before_gate,
-                device=torch.cuda.current_device(),
-                dtype=config.params_dtype,
-            )
 
     def forward(self, hidden_states, inference_params=None):
         """
@@ -296,11 +281,9 @@ class DragonMambaMixer(MegatronModule):
                 activation=self.activation,
                 headdim=None if self.D_has_hdim else self.headdim,
                 ngroups=self.ngroups_local,
-                norm_before_gate=self.norm_before_gate,
+                norm_before_gate=False,
             )
 
-            if self.rmsnorm:
-                y = self.norm(y)
         else:
             z, xBC, dt = torch.split(
                 xz,
@@ -366,7 +349,7 @@ class DragonMambaMixer(MegatronModule):
                     if self.D_has_hdim
                     else self.D
                 ),
-                z=z if not self.rmsnorm else None,
+                z=z,
                 dt_bias=self.dt_bias.float(),
                 dt_softplus=True,
                 return_final_states=ssm_state is not None,
@@ -376,13 +359,7 @@ class DragonMambaMixer(MegatronModule):
                 y, last_state = y
                 ssm_state.copy_(last_state)
 
-            if self.rmsnorm:
-                y = rearrange(y, "b l h p -> b l (h p)").contiguous()
-                z = rearrange(z, "b l h p -> b l (h p)").contiguous()
-                y = self.norm(y, z)
-            else:
-                y = rearrange(y, "b l h p -> b l (h p)").contiguous()
-
+            y = rearrange(y, "b l h p -> b l (h p)").contiguous()
         y = rearrange(y, "b l d -> l b d").contiguous()
         return y
 
@@ -468,8 +445,7 @@ class DragonMambaMixer(MegatronModule):
                     C,
                 )
                 y = y + D.to(dtype) * x
-                if not self.rmsnorm:
-                    y = y * self.act(z)  # (B D)
+                y = y * self.act(z)  # (B D)
             else:
                 # Discretize A and B (b (g n))
                 dt = F.softplus(dt + self.dt_bias.to(dtype=dt.dtype))  # (batch, nheads)
@@ -480,8 +456,7 @@ class DragonMambaMixer(MegatronModule):
                 y = torch.einsum("bhpn,bn->bhp", ssm_state.to(dtype), C)
                 y = y + rearrange(self.D.to(dtype), "h -> h 1") * x
                 y = rearrange(y, "b h p -> b (h p)")
-                if not self.rmsnorm:
-                    y = y * self.act(z)  # (B D)
+                y = y * self.act(z)  # (B D)
         else:
             A = repeat(A, "h -> h p n", p=self.headdim, n=self.d_state).to(dtype=torch.float32)
             dt = repeat(dt, "b h -> b h p", p=self.headdim)
@@ -490,8 +465,7 @@ class DragonMambaMixer(MegatronModule):
             B = rearrange(B, "b (g n) -> b g n", g=self.ngroups_local)
             C = rearrange(C, "b (g n) -> b g n", g=self.ngroups_local)
             x_reshaped = rearrange(x, "b (h p) -> b h p", p=self.headdim)
-            if not self.rmsnorm:
-                z = rearrange(z, "b (h p) -> b h p", p=self.headdim)
+            z = rearrange(z, "b (h p) -> b h p", p=self.headdim)
             y = selective_state_update(
                 ssm_state,
                 x_reshaped,
@@ -500,18 +474,13 @@ class DragonMambaMixer(MegatronModule):
                 B,
                 C,
                 D,
-                z=z if not self.rmsnorm else None,
+                z=z,
                 dt_bias=dt_bias,
                 dt_softplus=True,
             )
             y = rearrange(y, "b h p -> b (h p)")
 
-        if self.rmsnorm:
-            y = self.norm(y, z)
-
-        # b pd --> b d
-        out, out_bias = self.out_proj(y)
-        return out.unsqueeze(0), out_bias, conv_state, ssm_state
+        return y.unsqueeze(0), conv_state, ssm_state
 
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None):
         """

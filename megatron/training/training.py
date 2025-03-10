@@ -97,21 +97,14 @@ def print_datetime(string):
 
 
 def num_floating_point_operations(args, batch_size):
-    # Attention projection size.
-    query_projection_size = args.kv_channels * args.num_attention_heads
+    # Attention projection size. Modified for dragon
+    query_projection_size = args.kv_channels * args.num_attention_heads * 2
     query_projection_to_hidden_size_ratio = query_projection_size / args.hidden_size
     # Group Query Attention.
     if not args.group_query_attention:
         args.num_query_groups = args.num_attention_heads
-    # MoE.
-    num_experts_routed_to = 1 if args.num_experts is None else args.moe_router_topk
-    gated_linear_multiplier = 3 / 2 if args.swiglu else 1
-    shared_expert_ffn_hidden_size = (
-        0
-        if args.moe_shared_expert_intermediate_size is None
-        else args.moe_shared_expert_intermediate_size
-    )
-
+    # Mamba Mixer 
+    
     # The 12x term below comes from the following factors; for more details, see
     # "APPENDIX: FLOATING-POINT OPERATIONS" in https://arxiv.org/abs/2104.04473.
     # - 3x: Each GEMM in the model needs to be performed 3 times (forward pass,
@@ -141,14 +134,21 @@ def num_floating_point_operations(args, batch_size):
             # MLP.
             + (
                 (args.ffn_hidden_size / args.hidden_size)
-                * num_experts_routed_to
-                * gated_linear_multiplier
             )
-            # Shared Experts.
-            + ((shared_expert_ffn_hidden_size / args.hidden_size) * gated_linear_multiplier)
             # Logit.
             + (args.padded_vocab_size / (2 * args.num_layers * args.hidden_size))
         )
+        # Mamba
+        + (
+            batch_size
+            * args.seq_length
+            * args.num_layers
+            * 9
+            * 256 # d_state 256 for mamba-2
+            * args.hidden_size
+            * 3 
+        )
+        
     )
 
 

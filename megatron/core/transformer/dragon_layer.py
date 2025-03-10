@@ -165,6 +165,7 @@ class DragonLayer(MegatronModule):
             config=self.config, 
             layer_number=layer_number,
             window_size=window_size,
+            cache_sharing=cache_sharing,
         )
 
         # [Module 4: Post SelfAttention Norm]
@@ -355,7 +356,7 @@ class DragonLayer(MegatronModule):
             )
         """
         # Self attention.
-        attention_output = self.self_attention(
+        attention_output, key_states, value_states = self.self_attention(
             input_layernorm_output,
             #query_states, #When used input_proj we will directly use query_states
             key_states,
@@ -404,7 +405,7 @@ class DragonLayer(MegatronModule):
         output = make_viewless_tensor(
             inp=hidden_states, requires_grad=hidden_states.requires_grad, keep_graph=True
         )
-        if self.cache_sharing == CacheSharing.SECOND:
+        if self.cache_sharing.value == CacheSharing.SECOND.value:
             return output, None, None
         return output, key_states, value_states
 

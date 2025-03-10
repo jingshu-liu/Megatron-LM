@@ -50,9 +50,9 @@ TRAINING_ARGS=(
     --min-lr 1.0e-5
     --lr-warmup-fraction .001 
     #--lr-decay-iters 430000 
-    #--use-flash-attn
+    --use-flash-attn
     #--use-distributed-optimizer
-    --sequence-parallel
+    #--sequence-parallel
     #--overlap-param-gather 
     #--overlap-grad-reduce 
     --normalization RMSNorm
