@@ -51,6 +51,9 @@ class GPTDatasetConfig(BlendedMegatronDatasetConfig):
     s3_cache_path: str = None
     """Path for caching indices for s3 dataloading."""
 
+    patch_level: bool = False
+    """If for patch level training, don't preshift the token/labels"""
+
     def __post_init__(self) -> None:
         """Do asserts and set fields post init"""
         super().__post_init__()
@@ -102,7 +105,7 @@ class GPTDataset(MegatronDataset):
         self.cached_attention_mask = None
         self.cached_loss_mask = None
         self.cached_position_ids = None
-
+        self.patch_level = self.config.patch_level
         try:
             self._pad_token_id = self.config.tokenizer.pad
         except Exception:
@@ -172,13 +175,22 @@ class GPTDataset(MegatronDataset):
             text, _ = self._query_document_sample_shuffle_indices(idx)
 
         text = torch.from_numpy(text).long()
-        if self.config.add_extra_token_to_sequence:
-            tokens = text[:-1].contiguous()
-            labels = text[1:].contiguous()
+        if self.patch_level:
+            # print('using patch level, no preshifting')
+            if self.config.add_extra_token_to_sequence:
+                tokens = text[:-1].contiguous()
+                labels = text[:-1].contiguous()
+            else:
+                tokens = text
+                labels = text
         else:
-            tokens = text
-            labels = torch.roll(text, shifts=-1, dims=0)
-            labels[-1] = self._pad_token_id
+            if self.config.add_extra_token_to_sequence:
+                tokens = text[:-1].contiguous()
+                labels = text[1:].contiguous()
+            else:
+                tokens = text
+                labels = torch.roll(text, shifts=-1, dims=0)
+                labels[-1] = self._pad_token_id
 
         if (
             not self.masks_and_position_ids_are_cacheable

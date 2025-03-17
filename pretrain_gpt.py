@@ -7,7 +7,7 @@ from functools import partial
 from contextlib import nullcontext
 import inspect
 
-from typing import Union
+from typing import List, Optional, Union
 from megatron.training import get_args
 from megatron.training import print_rank_0
 from megatron.training import get_timers
@@ -127,7 +127,7 @@ def get_batch(data_iterator):
     return batch.values()
 
 
-def loss_func(loss_mask: torch.Tensor, output_tensor: torch.Tensor):
+def loss_func(loss_mask: torch.Tensor, output_tensor: Union[List[torch.Tensor], torch.Tensor]):
     """Loss function.
 
     Args:
@@ -141,12 +141,27 @@ def loss_func(loss_mask: torch.Tensor, output_tensor: torch.Tensor):
             the data parallel ranks
     """
     args = get_args()
-
-    losses = output_tensor.float()
-    loss_mask = loss_mask.view(-1).float()
-    total_tokens = loss_mask.sum()
-    loss = torch.cat([torch.sum(losses.view(-1) * loss_mask).view(1), total_tokens.view(1)])
-
+    # print('loss mask', loss_mask.size()) # batch size, global seq
+    batch_size, seq_len= loss_mask.size()
+    total_tokens = loss_mask.sum() / args.patch_size
+    if isinstance(output_tensor, list):
+        # loss_mask = loss_mask[...,args.patch_size:]
+        num_patches = seq_len // args.patch_size  # 4096 / 4 = 1024 patches
+        loss_mask_patched = loss_mask.view(batch_size, num_patches, args.patch_size)[:, 1: ,: ]
+        # print('loss_mask_patched ', loss_mask_patched.size())
+        loss = 0 
+        for patch_id in range(len(output_tensor)):
+            losses = output_tensor[patch_id].float()
+            loss_mask = loss_mask_patched[:,:,patch_id].reshape(-1).float()
+            # print('shift loss mask ', loss_mask.size())
+            loss += torch.sum(losses.view(-1)*loss_mask)
+        loss = loss / args.patch_size
+        loss = torch.cat([loss.view(1), total_tokens.view(1)])
+    else:
+        losses = output_tensor.float()
+        loss_mask = loss_mask.view(-1).float()
+        loss = torch.cat([torch.sum(losses.view(-1) * loss_mask).view(1), total_tokens.view(1)])
+    
     if args.context_parallel_size > 1:
         torch.distributed.all_reduce(loss, group=mpu.get_context_parallel_group())
 
@@ -203,7 +218,7 @@ def is_dataset_built_on_rank():
 
 def core_gpt_dataset_config_from_args(args):
     tokenizer = get_tokenizer()
-
+    patch_level = True if args.patch_size > 1 else False
     return GPTDatasetConfig(
         random_seed=args.seed,
         sequence_length=args.seq_length,
@@ -223,7 +238,8 @@ def core_gpt_dataset_config_from_args(args):
         reset_attention_mask=args.reset_attention_mask,
         eod_mask_loss=args.eod_mask_loss,
         create_attention_mask=args.create_attention_mask_in_dataloader,
-        s3_cache_path = args.s3_cache_path
+        s3_cache_path = args.s3_cache_path,
+        patch_level=patch_level
     )
 
 
